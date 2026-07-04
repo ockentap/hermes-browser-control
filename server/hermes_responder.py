@@ -19,12 +19,22 @@ Usage from ws_server.py:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
 import subprocess
 import sys
+import time as _time
 from pathlib import Path
+
+# --- logging --------------------------------------------------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+log = logging.getLogger("site-control-responder")
 
 # --- config ---------------------------------------------------------------
 
@@ -33,6 +43,8 @@ SKILL_NAME   = "site-control"
 DEFAULT_MODEL = os.environ.get("SC_LLM_MODEL", "MiniMax-M3")
 HERMES_BIN    = os.environ.get("HERMES_BIN", shutil.which("hermes") or "hermes")
 RESPONSE_TIMEOUT_S = int(os.environ.get("SC_RESPONDER_TIMEOUT", "120"))
+HEALTH_CHECK_TIMEOUT_S = int(os.environ.get("SC_HEALTH_CHECK_TIMEOUT", "15"))
+HEALTH_CHECK_CACHE_S = int(os.environ.get("SC_HEALTH_CHECK_CACHE", "30"))
 MAX_CONTEXT_CHARS = int(os.environ.get("SC_MAX_CONTEXT", "8000"))
 
 # --- session persistence --------------------------------------------------
@@ -51,6 +63,65 @@ def _save_session_id(sid: str) -> None:
 def reset_session() -> None:
     """Forget the current session. Next call starts fresh."""
     SESSION_FILE.unlink(missing_ok=True)
+
+
+# --- daemon health check --------------------------------------------------
+
+# Cache: timestamp of last successful health check. Used to avoid running
+# the pre-flight on every message when the daemon is healthy.
+_health_check_last_ok: float = 0.0
+
+
+def health_check() -> tuple[bool, str]:
+    """Run a quick `hermes chat -q ping` to verify the daemon is responsive.
+
+    Returns (ok, message). Caches a successful result for HEALTH_CHECK_CACHE_S
+    seconds so we don't re-probe on every message. Failed results are NOT
+    cached — we re-probe next time.
+
+    Designed to catch the case where the Hermes daemon is overloaded, hung,
+    or otherwise unable to service a real prompt. Without this, a user
+    message that takes longer than RESPONSE_TIMEOUT_S just fails silently
+    after 2 minutes. With this, we fail fast (~15s) and surface a clearer
+    error to the popup.
+    """
+    global _health_check_last_ok
+
+    # Use cache for successful results
+    now = _time.monotonic()
+    if (now - _health_check_last_ok) < HEALTH_CHECK_CACHE_S:
+        return (True, "cached")
+
+    if not shutil.which(HERMES_BIN) and not Path(HERMES_BIN).exists():
+        return (False, f"hermes binary not found at {HERMES_BIN!r}")
+
+    try:
+        proc = subprocess.run(
+            [HERMES_BIN, "chat", "-q", "ping", "-Q", "-m", DEFAULT_MODEL],
+            capture_output=True, text=True, timeout=HEALTH_CHECK_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return (False, f"health check timed out after {HEALTH_CHECK_TIMEOUT_S}s — daemon may be overloaded")
+    except Exception as e:
+        return (False, f"health check failed: {e}")
+
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "").strip()
+        return (False, f"health check exit {proc.returncode}: {err[:120]}")
+
+    # Non-empty stdout counts as healthy
+    out = (proc.stdout or "").strip()
+    if not out:
+        return (False, "health check returned empty stdout")
+
+    _health_check_last_ok = now
+    return (True, "ok")
+
+
+def reset_health_check_cache() -> None:
+    """Force the next respond() to re-probe the daemon."""
+    global _health_check_last_ok
+    _health_check_last_ok = 0.0
 
 
 # --- response parsing -----------------------------------------------------
@@ -146,6 +217,14 @@ def respond(user_msg: str, page_state: dict | None = None) -> tuple[str, list[di
     """
     if not shutil.which(HERMES_BIN) and not Path(HERMES_BIN).exists():
         return (f"(responder error: hermes binary not found at {HERMES_BIN!r})", [])
+
+    # Pre-flight: probe the daemon before spending the full RESPONSE_TIMEOUT_S
+    # on a request that may never return. Fail fast (15s) with a clearer
+    # error if the daemon is unresponsive.
+    ok, why = health_check()
+    if not ok:
+        log.warning("health check failed: %s", why)
+        return (f"(responder health check failed: {why})", [])
 
     prompt = _build_prompt(user_msg, page_state)
     if len(prompt) > MAX_CONTEXT_CHARS:
