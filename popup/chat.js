@@ -257,7 +257,8 @@ function setBusy(b, text) {
 
 // ---- thinking indicator ----
 let thinkingEl = null;
-let thinkingTimer = null;
+let thinkingTimer60 = null;
+let thinkingTimer120 = null;
 
 function addThinkingBubble() {
   clearThinkingBubble();
@@ -285,17 +286,28 @@ function addThinkingBubble() {
     frame++;
   }, 350);
 
-  thinkingTimer = setTimeout(() => {
+  // Extend the timeout as we go — Hermes for editing tasks with multi-turn
+  // context can take 60-90s. After 60s, switch the bubble to a "still
+  // thinking..." state so the user knows we're not dead.
+  thinkingTimer60 = setTimeout(() => {
     if (thinkingEl) {
-      thinkingEl.classList.add("failed");
-      label.textContent = "no response after 60s — bridge may be slow or disconnected";
-      clearInterval(thinkingEl._dotsTimer);
+      const label = thinkingEl.querySelector("span");
+      if (label) label.textContent = "still thinking… (long edit task)";
     }
   }, 60000);
+  thinkingTimer120 = setTimeout(() => {
+    if (thinkingEl) {
+      thinkingEl.classList.add("failed");
+      const label = thinkingEl.querySelector("span");
+      label.textContent = "no response after 120s — bridge may be slow or disconnected";
+      clearInterval(thinkingEl._dotsTimer);
+    }
+  }, 120000);
 }
 
 function clearThinkingBubble() {
-  if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = null; }
+  if (thinkingTimer60) { clearTimeout(thinkingTimer60); thinkingTimer60 = null; }
+  if (thinkingTimer120) { clearTimeout(thinkingTimer120); thinkingTimer120 = null; }
   if (thinkingEl) {
     if (thinkingEl._dotsTimer) clearInterval(thinkingEl._dotsTimer);
     thinkingEl.remove();
