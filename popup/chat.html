@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Site Control — Chat</title>
+  <link rel="stylesheet" href="chat.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="dot" id="conn-dot"></span>
+      <h1>Site Control</h1>
+    </div>
+    <div class="meta">
+      <div class="row">
+        <span class="k">tab</span>
+        <span class="v" id="tab-title">—</span>
+      </div>
+      <div class="row">
+        <span class="k">bridge</span>
+        <span class="v" id="bridge-state">disconnected</span>
+      </div>
+      <div class="row">
+        <span class="k">agent</span>
+        <span class="v" id="agent-name">hermes · MiniMax-M3</span>
+      </div>
+    </div>
+    <button id="settings-btn" title="Settings">⚙</button>
+  </header>
+
+  <main id="messages" aria-live="polite">
+    <div class="msg system" id="welcome">
+      Welcome. Type a message and the local agent can read and modify this page.
+    </div>
+  </main>
+
+  <footer>
+    <div class="input-row">
+      <textarea id="input" rows="1" placeholder="Tell the agent what to do on this page…"></textarea>
+      <button id="send-btn" title="Send (Enter)">⏎</button>
+    </div>
+    <div class="hints">
+      <span>Enter = send · Shift+Enter = newline · Ctrl+L = clear</span>
+      <span id="busy">idle</span>
+    </div>
+  </footer>
+
+  <div id="settings" class="hidden">
+    <div class="settings-card">
+      <h2>Bridge</h2>
+      <label>WebSocket URL</label>
+      <input id="bridge-url" type="text" placeholder="ws://127.0.0.1:7777/control?token=…&role=extension" />
+      <div class="row">
+        <button id="bridge-save">Save & reconnect</button>
+        <button id="bridge-clear">Disconnect</button>
+        <button id="settings-close">Close</button>
+      </div>
+      <small>The token lives on the server at <code>~/.hermes/site-control-token</code>.</small>
+    </div>
+  </div>
+
+  <script src="chat.js"></script>
+</body>
+</html>

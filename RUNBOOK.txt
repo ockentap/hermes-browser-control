@@ -1,0 +1,128 @@
+Site Control — Local Bring-Up
+============================
+
+4 pieces, in order:
+  1. LLM endpoint (Ollama or compatible) on 127.0.0.1:11434
+  2. WebSocket bridge (ws_server.py) on 127.0.0.1:7777
+  3. Browser extension loaded in Chromium, bridge URL set
+  4. Click popup → chat
+
+────────────────────────────────────────────────────────────────────
+PIECE 1 — (no longer needed!)
+────────────────────────────────────────────────────────────────────
+
+The agent is **Hermes itself** — same model you're talking to right now.
+When you type in the popup, ws_server.py shells out to:
+
+    hermes chat -q "<your message>" -s site-control -m MiniMax-M3
+
+The session id is persisted at ~/.hermes/site-control-session and reused
+across restarts. No separate LLM server required.
+
+If you want a different LLM (Ollama, OpenAI, etc.) instead, run agent.py:
+
+    SC_LLM_URL=http://127.0.0.1:11434/v1/chat/completions SC_LLM_MODEL=llama3.1 \
+        python3 ~/git/chromium-extension/chromium-control/server/agent.py
+
+To force legacy mode and disable Hermes-as-responder, rename or delete
+hermes_responder.py and restart the bridge.
+
+────────────────────────────────────────────────────────────────────
+PIECE 2 — WebSocket bridge
+────────────────────────────────────────────────────────────────────
+
+Start it in the foreground (debug-friendly):
+    python3 ~/git/chromium-extension/chromium-control/server/ws_server.py
+
+You should see something like:
+    TOKEN=<long-string>
+    EXT_URL=ws://127.0.0.1:7777/control?token=...&role=extension
+    CTRL_URL=ws://127.0.0.1:7777/control?token=...&role=controller
+
+The token is also written to ~/.hermes/site-control-token (chmod 600).
+
+For a long-running setup, the systemd unit is in:
+    ~/git/chromium-extension/chromium-control/systemd/site-control.service
+
+To run it as your user (no sudo, recommended for dev):
+    mkdir -p ~/.config/systemd/user
+    cp ~/git/chromium-extension/chromium-control/systemd/site-control.service \
+       ~/.config/systemd/user/
+    # edit WorkingDirectory and ExecStart if your path differs
+    systemctl --user daemon-reload
+    systemctl --user enable --now site-control.service
+    loginctl enable-linger $USER    # so it survives logout
+
+────────────────────────────────────────────────────────────────────
+PIECE 3 — Browser + extension
+────────────────────────────────────────────────────────────────────
+
+a) Open Chromium's extension page:
+       chromium ~/.config/chromium/Default/Extensions   # this URL trick won't work; use:
+       chromium https://chrome://extensions
+
+   Or just open Chromium and navigate to chrome://extensions manually.
+
+b) Top-right toggle: enable "Developer mode".
+
+c) Click "Load unpacked" → navigate to and select:
+       /home/<you>/git/chromium-extension/chromium-control/
+
+d) You should see "Site Control 1.0.0" appear. Click the
+   "service worker" link (under "Inspect views") — a DevTools
+   console opens.
+
+e) In that console, paste (filling in the real token from
+   ~/.hermes/site-control-token or from the bridge stdout):
+
+       chrome.storage.local.set({
+         bridgeUrl: "ws://127.0.0.1:7777/control?token=<TOKEN>&role=extension"
+       });
+
+   Press Enter. You should see `undefined` returned.
+
+   Or use the helper to generate the snippet:
+       python3 ~/git/chromium-extension/chromium-control/server/configure_extension.py
+       # prints:
+       # chrome.storage.local.set({bridgeUrl: "ws://127.0.0.1:7777/control?token=..."});
+
+f) Go back to chrome://extensions and verify the Site Control
+   icon is in the toolbar. If not, click the puzzle-piece icon
+   and pin it.
+
+────────────────────────────────────────────────────────────────────
+PIECE 4 — Try it
+────────────────────────────────────────────────────────────────────
+
+a) Open any website in a Chromium tab (e.g. https://example.com).
+
+b) Click the Site Control toolbar icon. Popup should show:
+       bridge: connected
+       tab: <your tab's title or URL>
+
+c) Type a message, hit Enter:
+       click the "More information" link
+
+   Within a couple seconds you should see the agent's reply in the
+   chat AND the click happen on the page.
+
+d) If it doesn't work:
+   - Open the service-worker DevTools (Piece 3d) and look at the
+     console — connection errors / WS handshake failures print there.
+   - Check `tail -F ~/.hermes/logs/site-control-server.log` on the
+     bridge side for what the server sees.
+   - Check Ollama logs (`journalctl --user -u ollama` or wherever
+     you launched it from).
+
+────────────────────────────────────────────────────────────────────
+Quick health check
+────────────────────────────────────────────────────────────────────
+
+In one terminal:
+    curl -s http://127.0.0.1:11434/v1/models | head -c 200
+
+In another:
+    ss -tlnp | grep -E '7777|11434'
+
+You want both ports bound to 127.0.0.1. If 11434 is missing, Ollama
+isn't up. If 7777 is missing, the bridge isn't running.

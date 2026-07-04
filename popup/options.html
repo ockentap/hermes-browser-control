@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Site Control — Options</title>
+  <link rel="stylesheet" href="popup.css" />
+  <style>
+    body { width: 520px; padding: 16px; }
+    h2 { font-size: 14px; margin: 16px 0 8px; color: var(--accent); }
+    p { color: var(--fg-dim); }
+    code { background: var(--bg-2); padding: 1px 4px; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <header><div class="brand"><span class="dot"></span><h1>Site Control</h1></div></header>
+
+  <main>
+    <h2>Shortcuts</h2>
+    <ul>
+      <li><code>Ctrl+Shift+Y</code> / <code>⌘+Shift+Y</code> — open popup</li>
+      <li><code>Ctrl+Shift+J</code> / <code>⌘+Shift+J</code> — run last CSS selector (highlights matches)</li>
+      <li>Right-click anywhere → "Site Control" submenu</li>
+    </ul>
+
+    <h2>Capabilities</h2>
+    <ul>
+      <li>Pick any element on the page (Inspector)</li>
+      <li>Click / set-value / fill-form (React &amp; Shadow DOM aware)</li>
+      <li>Run arbitrary JS expressions against the active page</li>
+      <li>Scroll element into view or scroll the window</li>
+      <li>Highlight matching elements temporarily</li>
+      <li>Read <code>localStorage</code>, <code>sessionStorage</code>, cookies (non-httpOnly), page meta</li>
+    </ul>
+
+    <h2>Privacy</h2>
+    <p>This extension runs entirely on your machine. It only talks to the active tab and stores your last selector / JS expression locally via <code>chrome.storage.local</code>.</p>
+
+    <h2>Install / update</h2>
+    <ol>
+      <li>Open <code>chrome://extensions</code></li>
+      <li>Toggle <strong>Developer mode</strong> on (top right)</li>
+      <li>Click <strong>Load unpacked</strong> → select the project folder</li>
+      <li>Pinned: the toolbar icon shows the popup; right-click for the context menu</li>
+    </ol>
+  </main>
+</body>
+</html>

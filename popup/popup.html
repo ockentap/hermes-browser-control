@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Site Control</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>Site Control</h1>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="interact" role="tab">Interact</button>
+      <button class="tab" data-tab="inspect" role="tab">Inspect</button>
+      <button class="tab" data-tab="js" role="tab">JS</button>
+      <button class="tab" data-tab="page" role="tab">Page</button>
+      <button class="tab" data-tab="history" role="tab">History</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ============ INTERACT ============ -->
+    <section class="panel active" id="panel-interact">
+      <div class="row">
+        <label>CSS selector</label>
+        <div class="input-group">
+          <input id="interact-sel" type="text" placeholder="e.g. #submit, button.primary, form input[name=email]" />
+          <button id="interact-save" title="Save as last selector">★</button>
+        </div>
+        <small>Tip: click <strong>Inspect</strong> tab and pick an element to fill this in.</small>
+      </div>
+
+      <div class="row">
+        <label>Action</label>
+        <div class="action-grid">
+          <button data-action="click">Click</button>
+          <button data-action="highlight">Highlight</button>
+          <button data-action="scroll-into">Scroll into view</button>
+          <button data-action="query-one">Query 1</button>
+          <button data-action="query-all">Query all</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <label>Set value</label>
+        <div class="input-group">
+          <input id="interact-val" type="text" placeholder="text to type / value to set" />
+          <button data-action="set-value">Set</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <label>Fill form (JSON)</label>
+        <textarea id="interact-form" rows="3" placeholder='{"input[name=email]":"a@b.c","input[name=pass]":"x"}'></textarea>
+        <button data-action="fill-form">Fill form</button>
+      </div>
+
+      <div class="row">
+        <label>Scroll window by</label>
+        <div class="input-group">
+          <input id="interact-sx" type="number" value="0" />
+          <input id="interact-sy" type="number" value="400" />
+          <button data-action="scroll">Scroll</button>
+          <button data-action="scroll-top" title="Back to top">↑</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ INSPECT ============ -->
+    <section class="panel" id="panel-inspect">
+      <p>Click an element on the page. ESC to cancel.</p>
+      <div class="row">
+        <button id="inspect-start" class="primary">Start inspect</button>
+        <button id="inspect-stop">Stop</button>
+      </div>
+      <div class="row">
+        <label>Last picked</label>
+        <pre id="inspect-result" class="output">—</pre>
+      </div>
+    </section>
+
+    <!-- ============ JS ============ -->
+    <section class="panel" id="panel-js">
+      <div class="row">
+        <label>Expression (runs in page context)</label>
+        <textarea id="js-expr" rows="4" placeholder="document.querySelectorAll('a').length"></textarea>
+        <div class="input-group">
+          <button data-action="js-run" class="primary">Run</button>
+          <button data-action="js-save">Save</button>
+          <button data-action="js-load">Load saved</button>
+        </div>
+      </div>
+      <div class="row">
+        <label>Result</label>
+        <pre id="js-result" class="output">—</pre>
+      </div>
+    </section>
+
+    <!-- ============ PAGE ============ -->
+    <section class="panel" id="panel-page">
+      <div class="row">
+        <button data-action="page-info">Get page info</button>
+        <button data-action="page-sniff">Sniff storage / cookies</button>
+        <button data-action="page-reload">Reload tab</button>
+      </div>
+      <pre id="page-result" class="output">—</pre>
+    </section>
+
+    <!-- ============ HISTORY ============ -->
+    <section class="panel" id="panel-history">
+      <div class="row">
+        <button id="hist-clear">Clear history</button>
+      </div>
+      <ol id="hist-list" class="history"></ol>
+    </section>
+  </main>
+
+  <footer>
+    <span id="status">idle</span>
+    <span class="kbd">Ctrl+Shift+Y</span>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

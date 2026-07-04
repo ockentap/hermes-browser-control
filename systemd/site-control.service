@@ -1,0 +1,24 @@
+[Unit]
+Description=Site Control — Chromium Extension Bridge
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=media
+ExecStart=/usr/bin/python3 -u /home/media/Projects/chromium-control/server/ws_server.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=site-control
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/media/.hermes/logs /home/media/.hermes
+
+[Install]
+WantedBy=multi-user.target

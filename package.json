@@ -1,0 +1,10 @@
+{
+  "name": "Site Control",
+  "version": "1.0.0",
+  "description": "Inspect, query, and interact with any page from a popup or keyboard shortcut.",
+  "private": true,
+  "scripts": {
+    "icons": "python3 scripts/make_icons.py"
+  },
+  "devDependencies": {}
+}
