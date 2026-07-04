@@ -1,9 +1,12 @@
-// Site Control — chat side panel. All messaging routes through background.js.
-// We never talk to the bridge directly from the side panel — that's the SW's job.
+// Site Control — side panel. Owns the WebSocket to the bridge directly.
+// The SW can't keep a long-lived WS in MV3 (gets torn down after ~30s idle),
+// so we keep it here in the side panel which lives as long as it's open.
 //
-// Persistence: conversations are stored per-tab in chrome.storage.local under
-// the key "convos". Switching tabs loads that tab's history. Sending a message
-// appends to the current tab's history AND to the DOM.
+// Flow:
+//   side panel (chat.js)  <--WS-->  bridge  <--subprocess-->  hermes chat
+//   side panel (chat.js)  <--chrome.runtime.sendMessage-->  SW  <--tabs.sendMessage-->  content.js
+//
+// Per-tab conversation history persisted in chrome.storage.local.
 
 const $ = (s) => document.querySelector(s);
 const messagesEl = $("#messages");
@@ -15,12 +18,155 @@ const tabTitle   = $("#tab-title");
 const busy       = $("#busy");
 
 let sessionId = null;
-let isConnected = false;
 let currentTabId = null;
 
+// ---- WebSocket ownership (side panel, not the SW) ----------------------
+
+let ws = null;
+let wsConnected = false;
+let wsBackoff = 1000;
+let wsUrl = null;
+let reconnectTimer = null;
+
+async function loadBridgeUrl() {
+  const { bridgeUrl } = await chrome.storage.local.get("bridgeUrl");
+  wsUrl = bridgeUrl || null;
+}
+
+function connectBridge() {
+  if (!wsUrl) {
+    setConnected("disconnected");
+    return;
+  }
+  if (ws) {
+    try { ws.close(); } catch {}
+    ws = null;
+  }
+  setConnected("connecting");
+  let sock;
+  try {
+    sock = new WebSocket(wsUrl);
+  } catch (e) {
+    console.error("[sc] WS construct failed:", e.message);
+    scheduleReconnect();
+    return;
+  }
+  ws = sock;
+
+  sock.addEventListener("open", () => {
+    wsConnected = true;
+    wsBackoff = 1000;
+    setConnected("connected");
+    sock.send(JSON.stringify({ type: "REGISTER", role: "extension" }));
+  });
+
+  sock.addEventListener("message", (ev) => {
+    let msg;
+    try { msg = JSON.parse(ev.data); }
+    catch { return; }
+    handleServerMessage(msg);
+  });
+
+  sock.addEventListener("close", () => {
+    wsConnected = false;
+    ws = null;
+    setConnected("disconnected");
+    scheduleReconnect();
+  });
+
+  sock.addEventListener("error", (e) => {
+    console.error("[sc] WS error:", e?.message || e);
+    // The close event will follow; reconnect handled there.
+  });
+}
+
+function scheduleReconnect() {
+  wsBackoff = Math.min(wsBackoff * 2, 5000);
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connectBridge, wsBackoff);
+}
+
+function reconnectNow() {
+  wsBackoff = 1000;
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  connectBridge();
+}
+
+function waitForConnection(timeout = 3000) {
+  return new Promise((resolve) => {
+    if (wsConnected) return resolve(true);
+    const start = Date.now();
+    const tick = () => {
+      if (wsConnected) return resolve(true);
+      if (Date.now() - start > timeout) return resolve(false);
+      setTimeout(tick, 25);
+    };
+    tick();
+  });
+}
+
+function wsSend(obj) {
+  if (!wsConnected || !ws) return false;
+  try {
+    ws.send(JSON.stringify(obj));
+    return true;
+  } catch (e) {
+    console.error("[sc] ws.send failed:", e.message);
+    return false;
+  }
+}
+
+// Server messages: route by type
+async function handleServerMessage(msg) {
+  if (msg.type === "WELCOME") return;
+  if (msg.type === "PING") { wsSend({ type: "PONG", t: Date.now() }); return; }
+  // SC_CHAT from the agent — show in chat
+  if (msg.type === "SC_CHAT") {
+    if (msg.sessionId && msg.sessionId !== sessionId) return;
+    clearThinkingBubble();
+    if (msg.from === "me") {
+      if (msg.thinking) {
+        await append("me", msg.text, { html: `<span class="thinking-dots">${escapeHtml(msg.text)}</span>`, skipSave: false });
+      } else if (msg.html) {
+        await append("me", "", { html: msg.html, skipSave: false });
+      } else {
+        await append("me", msg.text || "", { skipSave: false });
+      }
+    } else if (msg.from === "system") {
+      await sysMsg(msg.text || "", { skipSave: false });
+    } else if (msg.from === "error") {
+      await errMsg(msg.text || "", { skipSave: false });
+    } else if (msg.from === "action") {
+      await append("me", msg.summary || "Action:", { code: JSON.stringify(msg.detail, null, 2), skipSave: false });
+    }
+    setBusy(false);
+    return;
+  }
+  // Server-issued command for the active tab — forward to content script
+  // via the SW relay. The bridge expects a {id, ok, result} reply on the WS.
+  try {
+    const tab = await getActiveTabId();
+    if (!tab) {
+      wsSend({ id: msg.id, ok: false, error: "no active tab" });
+      return;
+    }
+    const result = await chrome.runtime.sendMessage({ ...msg, _targetTabId: tab });
+    wsSend({ id: msg.id, ...(result || { ok: false, error: "no response from SW" }) });
+  } catch (e) {
+    wsSend({ id: msg.id, ok: false, error: String(e?.message || e) });
+  }
+}
+
+async function getActiveTabId() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    return tab?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // ---- session id (per-tab) ----
-// Stable for the lifetime of the tab so background.js can route replies back
-// even if the side panel is hidden behind another tab.
 async function initSession(tabId) {
   const k = `session:${tabId}`;
   const { [k]: stored } = await chrome.storage.local.get(k);
@@ -32,7 +178,6 @@ async function initSession(tabId) {
 }
 
 // ---- conversation persistence ----
-// "convos" maps tabId (number-as-string) -> [{role, text, ts, html?, code?}, ...]
 async function loadConvo(tabId) {
   const { convos = {} } = await chrome.storage.local.get("convos");
   return convos[String(tabId)] || [];
@@ -77,15 +222,12 @@ async function append(role, text, opts = {}) {
   messagesEl.appendChild(el);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 
-  // Persist (unless we're rendering a saved convo)
   if (!opts.skipSave && currentTabId != null) {
     const msgs = await loadConvo(currentTabId);
     msgs.push({
-      role,
-      text,
+      role, text,
       ts: opts.time || Date.now(),
-      html: opts.html,
-      code: opts.code,
+      html: opts.html, code: opts.code,
     });
     await saveConvo(currentTabId, msgs);
   }
@@ -96,11 +238,17 @@ function sysMsg(text, opts = {}) { return append("sys", text, opts); }
 function errMsg(text, opts = {}) { return append("err", text, opts); }
 
 function setConnected(state) {
-  isConnected = state === "connected";
+  wsConnected = state === "connected";
   bridgeState.textContent = state;
   connDot.className = "dot " + (state === "connected" ? "ok" :
                                 state === "connecting" ? "warn" : "");
-  sendBtn.disabled = !isConnected && state !== "disconnected";
+  sendBtn.disabled = !wsConnected && state !== "disconnected";
+  // Mark any pending thinking bubble as failed on disconnect
+  if (state === "disconnected" && thinkingEl) {
+    thinkingEl.classList.add("failed");
+    const label = thinkingEl.querySelector("span");
+    if (label) label.textContent = "bridge disconnected";
+  }
 }
 
 function setBusy(b, text) {
@@ -108,8 +256,6 @@ function setBusy(b, text) {
 }
 
 // ---- thinking indicator ----
-// Animated bubble shown in the chat while waiting for a response.
-// Tracks one in-flight bubble at a time; clears it on reply or timeout.
 let thinkingEl = null;
 let thinkingTimer = null;
 
@@ -131,7 +277,6 @@ function addThinkingBubble() {
   messagesEl.appendChild(thinkingEl);
   messagesEl.scrollTop = messagesEl.scrollHeight;
 
-  // Animate the dots via JS (more reliable than CSS content animation)
   let frame = 0;
   const frames = [".", "..", "...", ".."];
   thinkingEl._dotsTimer = setInterval(() => {
@@ -140,7 +285,6 @@ function addThinkingBubble() {
     frame++;
   }, 350);
 
-  // Timeout — if no reply within 60s, mark as failed
   thinkingTimer = setTimeout(() => {
     if (thinkingEl) {
       thinkingEl.classList.add("failed");
@@ -197,56 +341,37 @@ async function getPageState() {
 async function send(text) {
   const t = text.trim();
   if (!t) return;
-  if (!isConnected) {
-    errMsg("bridge not connected — check ⚙ settings");
-    return;
-  }
   append("you", t);
   inputEl.value = "";
   inputEl.style.height = "auto";
   setBusy(true, "agent thinking…");
   addThinkingBubble();
-  try {
-    const pageState = await getPageState();
-    const r = await chrome.runtime.sendMessage({
-      type: "SC_CHAT_SEND",
-      sessionId,
-      text: t,
-      ts: Date.now(),
-      pageState,
-    });
-    if (!r || !r.ok) {
+  // If disconnected, try to reconnect and wait briefly
+  if (!wsConnected) {
+    reconnectNow();
+    const ok = await waitForConnection(3000);
+    if (!ok) {
       clearThinkingBubble();
-      errMsg("send failed: " + (r?.error || "no response"));
+      errMsg("bridge not connected — check ⚙ settings or that ws_server.py is running");
+      setBusy(false);
+      return;
     }
-  } catch (e) {
+  }
+  const pageState = await getPageState();
+  const envelope = {
+    type: "SC_CHAT",
+    sessionId,
+    from: "user",
+    text: t,
+    ts: Date.now(),
+    pageState,
+  };
+  if (!wsSend(envelope)) {
     clearThinkingBubble();
-    errMsg("send error: " + (e.message || e));
-  } finally {
+    errMsg("send failed — bridge not connected");
     setBusy(false);
   }
 }
-
-// ---- receive messages from the agent (pushed by background.js) ----
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type !== "SC_CHAT_INCOMING") return;
-  // Filter by session: this tab's panel only shows this tab's session replies.
-  if (msg.sessionId && msg.sessionId !== sessionId) return;
-  // Any incoming reply resolves the thinking bubble
-  if (msg.from !== "system") clearThinkingBubble();
-  if (msg.from === "me") {
-    if (msg.thinking) append("me", msg.text, { html: `<span class="thinking-dots">${escapeHtml(msg.text)}</span>` });
-    else if (msg.html) append("me", "", { html: msg.html });
-    else append("me", msg.text);
-  } else if (msg.from === "system") {
-    sysMsg(msg.text);
-  } else if (msg.from === "error") {
-    errMsg(msg.text);
-  } else if (msg.from === "action") {
-    append("me", msg.summary || "Action:", { code: JSON.stringify(msg.detail, null, 2) });
-  }
-  setBusy(false);
-});
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({
@@ -254,34 +379,31 @@ function escapeHtml(s) {
   })[c]);
 }
 
-// ---- bridge status updates ----
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "SC_BRIDGE_STATE") {
-    setConnected(msg.state);
-    // If bridge drops while we have a pending bubble, mark it failed
-    if (msg.state === "disconnected" && thinkingEl) {
-      thinkingEl.classList.add("failed");
-      const label = thinkingEl.querySelector("span");
-      if (label) label.textContent = "bridge disconnected";
-    }
-  }
-});
-
-// ---- tab switch handling ----
-// While the side panel is open, switch the visible conversation when the user
-// changes tabs in the main browser.
+// Tab change handling
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   await switchToTab(tabId);
 });
 
-// ---- input handling ----
+// React to bridgeUrl changes (from settings dialog)
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.bridgeUrl) {
+    wsUrl = changes.bridgeUrl.newValue || null;
+    if (ws) { try { ws.close(); } catch {} ws = null; }
+    if (wsUrl) {
+      reconnectNow();
+    } else {
+      setConnected("disconnected");
+    }
+  }
+});
+
+// Input handling
 inputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     send(inputEl.value);
   } else if (e.key === "l" && e.ctrlKey) {
     e.preventDefault();
-    // Clear only the current tab's convo (not all tabs)
     if (currentTabId != null) {
       saveConvo(currentTabId, []);
       messagesEl.innerHTML = "";
@@ -295,7 +417,7 @@ inputEl.addEventListener("input", () => {
 });
 sendBtn.addEventListener("click", () => send(inputEl.value));
 
-// ---- settings dialog ----
+// Settings dialog
 $("#settings-btn").addEventListener("click", async () => {
   const { bridgeUrl } = await chrome.storage.local.get("bridgeUrl");
   $("#bridge-url").value = bridgeUrl || "";
@@ -314,15 +436,16 @@ $("#bridge-clear").addEventListener("click", async () => {
   sysMsg("Bridge URL cleared.");
 });
 
-// ---- boot ----
+// Boot
 (async () => {
+  await loadBridgeUrl();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab?.id != null) {
     await switchToTab(tab.id);
   } else {
     sysMsg("No active tab detected.");
   }
-  chrome.runtime.sendMessage({ type: "SC_GET_BRIDGE_STATE" }, (r) => {
-    if (r) setConnected(r.state);
-  });
+  if (wsUrl) connectBridge();
+  else setConnected("disconnected");
+  inputEl.focus();
 })();
