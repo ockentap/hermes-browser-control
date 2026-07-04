@@ -307,6 +307,25 @@
         return { clicked: true };
       }
 
+      case "SC_NAVIGATE": {
+        // Navigate the active tab to the given URL. Triggered by setting
+        // window.location.href — content.js will be torn down by the
+        // navigation, but the call returns synchronously before that.
+        const url = String(msg.url || "").trim();
+        if (!url) throw new Error("SC_NAVIGATE: url is required");
+        // Accept only http(s) — chrome://, file://, javascript:, data: etc
+        // are blocked. This prevents Hermes from accidentally loading
+        // dangerous schemes if the prompt was manipulated.
+        let parsed;
+        try { parsed = new URL(url, location.href); }
+        catch (e) { throw new Error("SC_NAVIGATE: invalid url " + url); }
+        if (!/^https?:$/.test(parsed.protocol)) {
+          throw new Error("SC_NAVIGATE: protocol " + parsed.protocol + " not allowed");
+        }
+        window.location.href = parsed.toString();
+        return { navigating: parsed.toString() };
+      }
+
       case "SC_SET_VALUE": {
         const el = deepQuery(msg.selector);
         if (!el) throw new Error("not found: " + msg.selector);
