@@ -1,12 +1,12 @@
 # Site Control — chat-driven browser control
 
-A Manifest V3 Chromium extension with a **chat popup** that talks to an
-agent on this server (over Tailscale). You type, the agent reads and
-modifies the page, replies, and asks follow-ups.
+A Manifest V3 Chromium extension with a **side panel** that talks to a
+local agent (Hermes). You type, the agent reads and modifies the page,
+replies, and asks follow-ups.
 
 ```
    ┌───────────────────────────────┐
-   │  Site Control · example.com   │  ← popup (400×540)
+   │  Site Control · example.com   │  ← side panel (right edge, full height)
    │ ─────────────────────────────│
    │ you:  click the blue button   │
    │ me:   on it. clicking now.    │
@@ -14,6 +14,7 @@ modifies the page, replies, and asks follow-ups.
    │ me:   done. fill in email?    │
    │ you:  yes — user@example.com  │
    │ me:   typed and tabbed on.    │
+   │ [ thinking... ]               │
    │ ─────────────────────────────│
    │ [ type a message…        ] ⏎  │
    └───────────────────────────────┘
@@ -23,8 +24,7 @@ modifies the page, replies, and asks follow-ups.
               │
               ├─ bridge: ws_server.py
               │
-              └─ agent: agent.py
-                   └─ LLM (OpenAI-compatible)
+              └─ hermes chat -s site-control -m MiniMax-M3
                           ↓ tools
                    SC_CLICK, SC_FILL_FORM, …
                           ↓
@@ -67,19 +67,19 @@ Get the token from this machine:
 cat ~/.hermes/site-control-token
 ```
 
-The popup will show `bridge: connected` and `tab: <your active tab>` once
+The side panel will show `bridge: connected` and `tab: <your active tab>` once
 the WebSocket is up. Click the icon to chat.
 
 ## How the agent gets its brain
 
 By default, **the agent is Hermes itself** — same model you're talking to
-right now. When you type in the popup, `ws_server.py` shells out to
+right now. When you type in the side panel, `ws_server.py` shells out to
 `hermes chat -q "<your message>" -s site-control -m MiniMax-M3 -r <session-id>`.
 Hermes responds with SC_* commands; the bridge forwards them to the
 extension which executes them on the active tab.
 
 Session state is persisted at `~/.hermes/site-control-session` and
-reused across bridge restarts and popup restarts — full context survives.
+reused across bridge restarts and side panel restarts — full context survives.
 To start fresh: `rm ~/.hermes/site-control-session`.
 
 The skill that teaches Hermes the protocol lives in
@@ -124,12 +124,12 @@ sudo systemctl enable --now site-control.service
 ## Files
 
 ```
-manifest.json              Manifest V3 (popup = chat.html)
-background.js              Service worker: popup ↔ content ↔ bridge
+manifest.json              Manifest V3 (side panel = chat.html)
+background.js              Service worker: side panel ↔ content ↔ bridge
 content.js                 Page-side engine (DOM, Shadow DOM, screenshot)
-popup/chat.html            Chat popup shell
+popup/chat.html            Side panel shell (filename kept for back-compat)
 popup/chat.css             Dark theme
-popup/chat.js              UI: input, messages, status indicators
+popup/chat.js              UI: input, messages, status, per-tab persistence
 popup/{popup,options}.*    Legacy tabs-based UI (kept for reference)
 icons/                     16/32/48/128 toolbar icons
 scripts/make_icons.py      Regenerate icons

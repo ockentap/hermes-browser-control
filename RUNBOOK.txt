@@ -2,17 +2,17 @@ Site Control — Local Bring-Up
 ============================
 
 4 pieces, in order:
-  1. LLM endpoint (Ollama or compatible) on 127.0.0.1:11434
+  1. (none — agent is Hermes itself, no separate LLM needed)
   2. WebSocket bridge (ws_server.py) on 127.0.0.1:7777
   3. Browser extension loaded in Chromium, bridge URL set
-  4. Click popup → chat
+  4. Click toolbar icon to open side panel → chat
 
 ────────────────────────────────────────────────────────────────────
 PIECE 1 — (no longer needed!)
 ────────────────────────────────────────────────────────────────────
 
 The agent is **Hermes itself** — same model you're talking to right now.
-When you type in the popup, ws_server.py shells out to:
+When you type in the side panel, ws_server.py shells out to:
 
     hermes chat -q "<your message>" -s site-control -m MiniMax-M3
 
@@ -96,7 +96,7 @@ PIECE 4 — Try it
 
 a) Open any website in a Chromium tab (e.g. https://example.com).
 
-b) Click the Site Control toolbar icon. Popup should show:
+b) Click the Site Control toolbar icon. The side panel should show:
        bridge: connected
        tab: <your tab's title or URL>
 

@@ -172,7 +172,7 @@ mode, rename or remove `server/hermes_responder.py` and restart the bridge
 | Side panel shows `bridge: disconnected` | `bridgeUrl` missing or wrong | Re-run step 5 with the correct token |
 | `bridge not connected — check ⚙ settings` | Same as above, or bridge crashed | Check the bridge terminal for errors; restart it |
 | Reply never comes, red `no response after 60s` | Hermes CLI not on PATH or stuck | `which hermes`; restart bridge |
-| Thinking bubble says `bridge disconnected` mid-reply | WS dropped | Check bridge terminal; popup auto-reconnects |
+| Thinking bubble says `bridge disconnected` mid-reply | WS dropped | Check bridge terminal; side panel auto-reconnects |
 | `ModuleNotFoundError: No module named 'websockets'` | pip installed to wrong Python | `python3 -m pip install --break-system-packages websockets` |
 | `python3` is from linuxbrew, no `websockets` | Two Pythons on system | `python3 -m pip install --break-system-packages websockets` |
 
@@ -182,7 +182,7 @@ Bridge log: `tail -F ~/.hermes/logs/site-control-server.log`
 
 ```
 manifest.json              Manifest V3 (side panel = chat.html)
-background.js              Service worker: popup ↔ content ↔ bridge
+background.js              Service worker: side panel ↔ content ↔ bridge
 content.js                 Page-side engine (DOM, Shadow DOM, screenshot)
 popup/chat.html            Side panel shell
 popup/chat.css             Dark theme
