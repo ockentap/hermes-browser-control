@@ -12,7 +12,7 @@ you're talking to right now. Everything runs locally on your machine.
    │ me:   on it. clicking now.    │
    │       ▸ SC_CLICK  #btn-submit │
    │ me:   done. fill in email?    │
-   │ you:  yes — user@example.com      │
+   │ you:  yes — user@example.com  │
    │ me:   typed and tabbed on.    │
    │ [ thinking... ]               │
    │ ─────────────────────────────│

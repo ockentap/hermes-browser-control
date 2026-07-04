@@ -12,7 +12,7 @@ modifies the page, replies, and asks follow-ups.
    │ me:   on it. clicking now.    │
    │       ▸ SC_CLICK  #btn-submit │
    │ me:   done. fill in email?    │
-   │ you:  yes — user@example.com      │
+   │ you:  yes — user@example.com  │
    │ me:   typed and tabbed on.    │
    │ ─────────────────────────────│
    │ [ type a message…        ] ⏎  │
