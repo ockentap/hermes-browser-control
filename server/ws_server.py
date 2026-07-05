@@ -177,6 +177,54 @@ async def _send_chat_to_extension(ws, text: str, session_id: str | None = None) 
         log.warning("extension disconnected before chat reply could be sent")
 
 
+async def _execute_commands_and_collect(ws, commands: list[dict]) -> str:
+    """Send a batch of commands to the extension and return a feedback string
+    describing what happened (used as input to the next agentic-loop iteration).
+
+    Each command gets a fresh id, is sent to the extension, and we wait for
+    its RESULT envelope on the WS. Failures are captured in the feedback so
+    Hermes can react. SC_NAVIGATE and SC_RUN_JS deliberately skip the wait
+    (the page is being torn down for navigation, and SC_RUN_JS has a self-
+    contained return value).
+    """
+    results_lines = []
+    for cmd in commands:
+        if not isinstance(cmd, dict):
+            continue
+        cmd.setdefault("id", str(uuid.uuid4()))
+        cmd.setdefault("timeout", 10)
+        ctype = cmd.get("type")
+        try:
+            # Register a future so the WS reply resolves the result.
+            fut = asyncio.get_event_loop().create_future()
+            PENDING[cmd["id"]] = fut
+            await ws.send(json.dumps(cmd))
+            try:
+                reply = await asyncio.wait_for(fut, timeout=cmd["timeout"])
+            except asyncio.TimeoutError:
+                PENDING.pop(cmd["id"], None)
+                results_lines.append(f"  {ctype}: TIMEOUT after {cmd['timeout']}s")
+                continue
+            if reply.get("ok"):
+                # Extract a useful summary field if present
+                detail = ""
+                for k in ("result", "value", "clicked", "set", "navigating", "highlighted"):
+                    if k in reply:
+                        detail = f" → {reply[k] if not isinstance(reply[k], (dict, list)) else '...'}"
+                        break
+                results_lines.append(f"  {ctype}: ok{detail}")
+            else:
+                err = reply.get("error", "unknown")
+                results_lines.append(f"  {ctype}: FAILED — {err}")
+        except ConnectionClosed:
+            PENDING.pop(cmd["id"], None)
+            results_lines.append(f"  {ctype}: extension disconnected")
+            break
+        except Exception as e:
+            results_lines.append(f"  {ctype}: exception — {e}")
+    return "\n".join(results_lines) if results_lines else "(no commands executed)"
+
+
 async def _handle_sc_chat_via_responder(ws, msg: dict) -> None:
     """Pop the user message through hermes_responder, then send the result
     (chat reply + SC_* commands) back to the extension that sent it.
@@ -199,30 +247,73 @@ async def _handle_sc_chat_via_responder(ws, msg: dict) -> None:
     if page_state is None:
         page_state = {}
 
-    # 2. Run the responder (this shells out to `hermes chat`, may take seconds)
+    # 2. Agentic loop: call Hermes, execute its commands, feed results back,
+    #    loop until Hermes says "done" (no commands + only SC_REPLY) or we hit
+    #    the iteration cap. Without this loop, a multi-step task like
+    #    "fill form, click Next, fill next form, click Submit" would only
+    #    run the first step and leave the user with a half-finished task.
+    MAX_ITERATIONS = 6
+    final_reply = ""
+    iteration = 0
+    feedback = ""  # accumulated command results fed back into next prompt
     try:
-        # hermes_responder.respond is sync; run in a thread to avoid blocking the loop
-        reply_text, commands = await asyncio.to_thread(
-            hermes_responder.respond, user_text, page_state
-        )
-        log.info("responder returned: reply_len=%d commands=%d",
-                 len(reply_text), len(commands))
+        while iteration < MAX_ITERATIONS:
+            iteration += 1
+            # Build prompt: original user msg + accumulated feedback from
+            # previous iterations (only after iteration 1)
+            prompt_msg = user_text
+            if feedback:
+                prompt_msg += "\n\n[Tool results from previous step]\n" + feedback
+
+            reply_text, commands = await asyncio.to_thread(
+                hermes_responder.respond, prompt_msg, page_state
+            )
+            log.info("iter %d: responder returned reply_len=%d commands=%d",
+                     iteration, len(reply_text), len(commands))
+
+            # No commands + a reply text → Hermes is done, send the final reply
+            if not commands:
+                final_reply = reply_text or "(no reply)"
+                break
+
+            # Commands present → execute them and feed results back
+            log.info("iter %d: responder emitted %d command(s): %s",
+                     iteration, len(commands), [c.get("type") for c in commands])
+            results = await _execute_commands_and_collect(ws, commands)
+
+            # If any reply text came back alongside commands (e.g. SC_REPLY
+            # mixed with SC_CLICK), preserve it as the running final reply —
+            # later iterations can refine or extend it.
+            if reply_text:
+                final_reply = reply_text
+
+            # Build feedback for next iteration. Always include fresh page
+            # state so Hermes sees what the page looks like AFTER its actions.
+            new_state = await _ask_extension_for_page_info(ws) or {}
+            feedback_parts = [results]
+            if new_state:
+                # Compact view of post-action page state
+                title = new_state.get("title", "?")
+                url = new_state.get("url", "?")
+                body = (new_state.get("bodyText") or "")[:500]
+                feedback_parts.append(
+                    f"\n[Page after action — title={title!r} url={url!r}]\n{body}"
+                )
+            feedback = "\n".join(feedback_parts)
+
+            # Update page_state so SC_GET_PAGE_INFO-style data stays current
+            page_state = new_state or page_state
     except Exception as e:
-        log.exception("responder crashed")
+        log.exception("responder loop crashed")
         await _send_chat_to_extension(ws, f"(responder crashed: {e})", session_id)
         return
 
-    # 3. Forward commands to the extension (in order)
-    if commands:
-        log.info("responder emitted %d command(s): %s",
-                 len(commands), [c.get("type") for c in commands])
-        await _send_commands_to_extension(ws, commands)
+    log.info("agentic loop done after %d iteration(s)", iteration)
 
-    # 4. Send the chat reply (if any). If responder emitted no SC_REPLY but
-    #    also no commands, send a fallback so the user isn't left silent.
-    if reply_text:
-        await _send_chat_to_extension(ws, reply_text, session_id)
-    elif not commands:
+    # 3. Send the final chat reply
+    if final_reply:
+        await _send_chat_to_extension(ws, final_reply, session_id)
+    else:
         await _send_chat_to_extension(
             ws, "(responder produced no output — check the bridge log)", session_id
         )
