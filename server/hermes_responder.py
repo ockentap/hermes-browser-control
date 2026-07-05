@@ -105,15 +105,16 @@ def health_check() -> tuple[bool, str]:
     except Exception as e:
         return (False, f"health check failed: {e}")
 
-    # Use exit code as a hint, but trust stdout content as the real signal.
-    # Hermes occasionally exits 1 with successful output (e.g. when it
-    # starts a new session mid-flight — it writes the session_id to
-    # stderr and a successful reply to stdout). Empty stdout = real failure.
+    if proc.returncode != 0 and not (proc.stdout or "").strip():
+        # Real failure — no response at all
+        err = (proc.stderr or "").strip()
+        return (False, f"health check produced no output (exit={proc.returncode}, stderr={err[:200]})")
+
     out = (proc.stdout or "").strip()
     err = (proc.stderr or "").strip()
     if not out:
-        # Real failure — no response at all
-        return (False, f"health check produced no output (exit={proc.returncode}, stderr={err[:100]})")
+        # Empty stdout = real failure
+        return (False, f"health check produced no output (exit={proc.returncode}, stderr={err[:200]})")
 
     # Non-empty stdout = healthy regardless of exit code
     _health_check_last_ok = now
@@ -281,16 +282,39 @@ def respond(user_msg: str, page_state: dict | None = None) -> tuple[str, list[di
         return (f"(responder exit {proc.returncode}: {err[:200]})", [])
 
     response_text = (proc.stdout or "").strip()
+    err_text = (proc.stderr or "").strip()
 
-    # Hermes prints "[session_id] <response>" in -Q mode when starting new sessions,
-    # or just the response when resuming. Strip a leading bracketed session id.
-    sid_match = re.match(r"^\[([a-f0-9-]+)\]\s*\n?(.*)$", response_text, re.DOTALL)
-    if sid_match:
-        new_sid = sid_match.group(1)
-        response_text = sid_match.group(2).strip()
-        if new_sid and new_sid != sid:
-            _save_session_id(new_sid)
+    # Hermes sometimes returns empty stdout when the daemon is briefly
+    # overloaded (observed ~1-in-3 calls during stress). Retry once with a
+    # short delay to let it recover. If it still returns empty, surface
+    # stderr so we have diagnostics.
+    if not response_text:
+        # Retry once after a short delay — Hermes is sometimes overloaded
+        # and returns empty stdout even though the daemon is fine.
+        log.warning("first call returned empty stdout; retrying once after 3s")
+        if err_text:
+            log.warning("stderr from failed call: %s", err_text[:300])
+        _time.sleep(3)
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=RESPONSE_TIMEOUT_S,
+            )
+            response_text = (proc.stdout or "").strip()
+            err_text = (proc.stderr or "").strip()
+            if response_text:
+                log.info("retry succeeded (%d chars)", len(response_text))
+            else:
+                log.warning("retry also returned empty stdout; stderr: %s", err_text[:300])
+        except Exception as e:
+            log.warning("retry crashed: %s", e)
 
+    if not response_text:
+        # Final failure after retry
+        return (f"(responder no output from hermes chat — daemon may be overloaded. stderr: {err_text[:200]})", [])
+
+    # Hermes prints "session_id: <uuid>" in stderr when starting a new
+    # session. The actual reply is on stdout. No need to strip anything
+    # from response_text anymore.
     return parse_commands(response_text)
 
 
