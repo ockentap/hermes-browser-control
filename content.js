@@ -267,8 +267,48 @@
             frame: window === top,
             elementCount: document.querySelectorAll("*").length,
             hasShadow: !!document.querySelectorAll("*").length && [...document.querySelectorAll("*")].some(n => n.shadowRoot),
+            // Visible text content (truncated) — so Hermes knows what's on
+            // the page, not just the URL. This is the difference between
+            // "navigate to contacts" working vs asking "which contacts?"
+            bodyText: extractVisibleText(),
+            links: extractLinks(),
           },
         };
+
+      // ---- helpers used by SC_GET_PAGE_INFO -----------------------
+
+      function extractVisibleText(limit = 2000) {
+        try {
+          // innerText respects CSS visibility (unlike textContent). Strip
+          // scripts/styles first so we don't ship JS source to Hermes.
+          const clone = document.body ? document.body.cloneNode(true) : null;
+          if (!clone) return "";
+          clone.querySelectorAll("script, style, noscript, template").forEach(n => n.remove());
+          const txt = (clone.innerText || clone.textContent || "").trim();
+          // Collapse runs of whitespace so the prompt is readable
+          return txt.replace(/\s+/g, " ").slice(0, limit);
+        } catch { return ""; }
+      }
+
+      function extractLinks(limit = 30) {
+        try {
+          const out = [];
+          const seen = new Set();
+          for (const a of document.querySelectorAll("a[href]")) {
+            const href = a.getAttribute("href") || "";
+            if (!href || href.startsWith("#") || href.startsWith("javascript:")) continue;
+            const text = (a.textContent || "").trim().replace(/\s+/g, " ").slice(0, 80);
+            if (!text) continue;
+            const abs = (() => { try { return new URL(href, location.href).toString(); } catch { return href; } })();
+            const key = abs + "|" + text;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push({ text, href: abs });
+            if (out.length >= limit) break;
+          }
+          return out;
+        } catch { return []; }
+      }
 
       case "SC_QUERY_SELECTOR":
         return { matches: [summarize(deepQuery(msg.selector), 1)] };

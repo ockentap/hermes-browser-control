@@ -344,6 +344,8 @@ async function getPageState() {
       readyState: info.readyState,
       elementCount: info.elementCount,
       hasShadowDOM: info.hasShadow,
+      bodyText: info.bodyText || "",
+      links: info.links || [],
     };
   } catch {
     return null;

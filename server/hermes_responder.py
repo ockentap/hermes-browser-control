@@ -184,7 +184,6 @@ def _build_prompt(user_msg: str, page_state: dict | None) -> str:
     parts: list[str] = []
 
     if page_state:
-        # Compact page summary — title, URL, element count, focused element
         title = page_state.get("title", "?")
         url = page_state.get("url", "?")
         ready = page_state.get("readyState", "?")
@@ -199,6 +198,27 @@ def _build_prompt(user_msg: str, page_state: dict | None) -> str:
             + (f", focused={focused}" if focused else "")
             + "]"
         )
+
+        # Include visible body text (truncated to 2000 chars by content.js).
+        # This is what lets Hermes answer questions about the page content
+        # and find navigation targets like "contacts", "settings", etc.
+        body_text = (page_state.get("bodyText") or "").strip()
+        if body_text:
+            parts.append("")
+            parts.append("[Page content — first ~2000 chars of visible text]")
+            parts.append(body_text)
+
+        # Include the visible links so Hermes knows where it can navigate
+        # to. Especially useful on sites without obvious nav — Hermes can
+        # match the user's request against link text.
+        links = page_state.get("links") or []
+        if links:
+            parts.append("")
+            parts.append(f"[Visible links — {min(len(links), 30)} shown]")
+            for link in links[:30]:
+                text = link.get("text", "")
+                href = link.get("href", "")
+                parts.append(f"  - {text!r}  →  {href}")
 
         # If a screenshot was attached, reference it
         if page_state.get("screenshotPath"):
