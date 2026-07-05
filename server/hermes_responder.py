@@ -105,15 +105,17 @@ def health_check() -> tuple[bool, str]:
     except Exception as e:
         return (False, f"health check failed: {e}")
 
-    if proc.returncode != 0:
-        err = (proc.stderr or proc.stdout or "").strip()
-        return (False, f"health check exit {proc.returncode}: {err[:120]}")
-
-    # Non-empty stdout counts as healthy
+    # Use exit code as a hint, but trust stdout content as the real signal.
+    # Hermes occasionally exits 1 with successful output (e.g. when it
+    # starts a new session mid-flight — it writes the session_id to
+    # stderr and a successful reply to stdout). Empty stdout = real failure.
     out = (proc.stdout or "").strip()
+    err = (proc.stderr or "").strip()
     if not out:
-        return (False, "health check returned empty stdout")
+        # Real failure — no response at all
+        return (False, f"health check produced no output (exit={proc.returncode}, stderr={err[:100]})")
 
+    # Non-empty stdout = healthy regardless of exit code
     _health_check_last_ok = now
     return (True, "ok")
 
